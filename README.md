@@ -26,7 +26,9 @@
 | 2.5G 版 | `tianyi_tyfza1_2p5g` | `openwrt-rtl9617c-generic-tianyi_tyfza1_2p5g-squashfs-sysupgrade.itb` |
 | 全千兆版 | `tianyi_tyfza1_4ge` | `openwrt-rtl9617c-generic-tianyi_tyfza1_4ge-squashfs-sysupgrade.itb` |
 
-固件从源码直接产出，未做二次修改；构建配置、`README.txt` 与统一的 `SHA256SUMS.all` 也会一并上传。各变体自带的同名 `SHA256SUMS`、`config.buildinfo`、`pe-tx-code.h` 会被重命名或跳过，确保 Release 资产名全局唯一。
+构建配置、`README.txt` 与统一的 `SHA256SUMS.all` 会一并上传。各变体自带的同名 `SHA256SUMS`、`config.buildinfo`、`pe-tx-code.h` 会被重命名或跳过，确保 Release 资产名全局唯一。
+
+**唯一一处对源码的修正**：统一固件型号标识（见下节），以修复上游的型号不匹配 bug。
 
 ## 云编译做了哪些额外处理
 
@@ -37,6 +39,38 @@
 3. 拉取 Argon 主题固定提交 `539e3e1db56b2348c3655615540e45638b797c73`，并链接到 `package/luci-theme-argon`；
 4. 将源码自带的三个 LuCI feed 补丁应用到 `feeds/luci`，否则 PON 状态页、资源版本号和功率标签不完整；
 5. 分别用 `configs/tyfza1-2p5g.config` 与 `configs/tyfza1-4ge.config` 生成配置，校验目标设备和关键包后编译。
+
+## 型号标识统一（重要）
+
+上游源码有一个 bug，会导致 `sysupgrade` 型号检查失败、被迫用 `-F` 强刷：
+
+- `include/image.mk` 里 `SUPPORTED_DEVICES := $(subst _,$(comma),$(1))`，把设备 profile 名 `tianyi_tyfza1_2p5g` 的下划线全换成逗号，得到镜像自报型号 `tianyi,tyfza1,2p5g`；
+- 而设备树 `compatible` / `board_name` 是 `tianyi,tyfza1-2p5g`（`2p5g` 前是**连字符**）；
+- 两者天生不一致，于是 `sysupgrade` 报 `Device tianyi,tyfza1-2p5g not supported by this image`，只能用 `-F` 绕过，且看不到明确的成功反馈。
+
+本工程在 `scripts/fix_supported_devices.sh` 中给两个设备显式注入与 `board_name` 一致的 `SUPPORTED_DEVICES`，并用 `scripts/build_one.sh` 自检：
+
+| 变体 | 修复前 | 修复后（本工程） |
+| --- | --- | --- |
+| 2.5G | `tianyi,tyfza1,2p5g` | `tianyi,tyfza1-2p5g` |
+| 4GE | `tianyi,tyfza1,4ge` | `tianyi,tyfza1-4ge` |
+
+**因此本工程编译出的固件可以直接 `sysupgrade`，不需要 `-F`**，并且会明确打印 `sysupgrade successful`。
+
+## 刷机方式
+
+配套的是 lyq1996 的原生 U-Boot，它开机会进 `bootmenu`（约 2 秒），有两个选项：
+
+- `Start OpenWrt`：从 UBI 的 `fit` 卷读取镜像并启动（正常入口）；
+- `Start Web Recovery`：进入 `http://192.168.0.1` 网页恢复环境。
+
+推荐流程：
+
+1. 进 `http://192.168.0.1` 网页恢复环境，在"系统/固件镜像"区域上传 **`squashfs-sysupgrade.itb`**（不是 recovery），目标卷为 `fit`；
+2. 刷完重启，选 `Start OpenWrt`（或等待自动启动）；
+3. 进入系统后如需升级，直接 `sysupgrade /path/to/sysupgrade.itb` 即可，无需 `-F`。
+
+若网页恢复环境打不开，可在 `bootmenu` 选 `Start Web Recovery` 重新进入；`initramfs-recovery.itb` 仅用于救急内存启动，它不是持久化系统。
 
 ## 发布资产失败排查
 
@@ -58,8 +92,9 @@
 .github/workflows/build.yml   云编译与发布流程
 configs/tyfza1-2p5g.config    2.5G 版配置种子
 configs/tyfza1-4ge.config     全千兆版配置种子
-scripts/prepare_openwrt.sh    拉取并锁定源码
+scripts/prepare_openwrt.sh    拉取并锁定源码，并调用型号统一修复
+scripts/fix_supported_devices.sh  统一固件型号标识（修复上游 bug）
 scripts/prepare_feeds.sh      准备 feeds、Argon 主题和 LuCI 补丁
-scripts/build_one.sh          单变体配置校验、编译与产物收集
+scripts/build_one.sh          单变体型号自检、配置校验、编译与产物收集
 scripts/package_release.sh    汇总产物与生成 SHA256SUMS
 ```
