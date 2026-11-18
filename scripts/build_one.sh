@@ -25,6 +25,18 @@ esac
 mkdir -p "$OUT"
 cd "$TREE"
 
+# 自检：固件 metadata 的型号必须与设备树 board_name 一致，
+# 否则 sysupgrade 型号检查会失败、被迫用 -F 强刷。
+case "$VARIANT" in
+    2p5g) EXPECTED_DEV="tianyi,tyfza1-2p5g" ;;
+    4ge)  EXPECTED_DEV="tianyi,tyfza1-4ge" ;;
+esac
+grep -q "SUPPORTED_DEVICES := ${EXPECTED_DEV}" \
+    "$TREE/target/linux/rtl9617c/image/Makefile" || {
+    echo "型号未统一：期望 SUPPORTED_DEVICES := ${EXPECTED_DEV}，请检查 fix_supported_devices.sh" >&2
+    exit 1
+}
+
 cp "$CONFIG" .config
 make defconfig
 

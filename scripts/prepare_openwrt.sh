@@ -21,3 +21,7 @@ git remote add origin "$SRC_URL" 2>/dev/null || git remote set-url origin "$SRC_
 git fetch --depth 1 origin "$SRC_COMMIT"
 git checkout --detach FETCH_HEAD
 git rev-parse HEAD
+
+# 统一固件 metadata 的型号标识，使其与设备树 board_name 一致，
+# 这样 sysupgrade 无需 -F 且能明确报告刷入成功。
+sh "$PROJECT/scripts/fix_supported_devices.sh" "$TREE"
