@@ -127,12 +127,22 @@ jobs:
 
       - name: Publish release
         if: ${{ inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.release_tag || github.ref_name }}
-          name: ${{ inputs.release_tag || github.ref_name }}
-          body_path: ${{ runner.temp }}/release-notes.md
-          files: artifacts/release/**
-          fail_on_unmatched_files: false
-          draft: false
-          prerelease: false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG 已存在，将更新其资产"
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+          shopt -s nullglob
+          files=(artifacts/release/*)
+          echo "上传 ${#files[@]} 个资产："
+          printf '  %s\n' "${files[@]}"
+          # --clobber 会先删除同名资产再上传，重跑同一 tag 不会 404
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
