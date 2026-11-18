@@ -26,7 +26,7 @@
 | 2.5G 版 | `tianyi_tyfza1_2p5g` | `openwrt-rtl9617c-generic-tianyi_tyfza1_2p5g-squashfs-sysupgrade.itb` |
 | 全千兆版 | `tianyi_tyfza1_4ge` | `openwrt-rtl9617c-generic-tianyi_tyfza1_4ge-squashfs-sysupgrade.itb` |
 
-固件从源码直接产出，未做二次修改；`SHA256SUMS` 与构建配置也会一并上传。
+固件从源码直接产出，未做二次修改；构建配置、`README.txt` 与统一的 `SHA256SUMS.all` 也会一并上传。各变体自带的同名 `SHA256SUMS`、`config.buildinfo`、`pe-tx-code.h` 会被重命名或跳过，确保 Release 资产名全局唯一。
 
 ## 云编译做了哪些额外处理
 
@@ -37,6 +37,14 @@
 3. 拉取 Argon 主题固定提交 `539e3e1db56b2348c3655615540e45638b797c73`，并链接到 `package/luci-theme-argon`；
 4. 将源码自带的三个 LuCI feed 补丁应用到 `feeds/luci`，否则 PON 状态页、资源版本号和功率标签不完整；
 5. 分别用 `configs/tyfza1-2p5g.config` 与 `configs/tyfza1-4ge.config` 生成配置，校验目标设备和关键包后编译。
+
+## 发布资产失败排查
+
+如果看到 `error updating release asset metadata ... HttpError: Not Found` 但前面步骤全部成功，说明**固件已编译完成**，只是发布环节出错：
+
+1. 直接从该次运行的 **Artifacts → tyfza1-firmware-\<run_id\>** 下载即可刷机，无需等待 Release。
+2. 该错误通常来自两个变体上传了同名资产（旧版 `softprops/action-gh-release` 递归匹配 `**` 所致）。本工程已改为汇总时重命名文件，并用 `gh release upload --clobber` 发布，重跑同一 tag 也能覆盖而不报错。
+3. 更新后重新推送 `.github/workflows/build.yml` 与 `scripts/package_release.sh`，再次运行即可；也可只重跑失败的 `Package and publish` job（需先重新下载到新 Artifact）。
 
 ## 刷机提醒
 
