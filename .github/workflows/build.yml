@@ -1,1 +1,138 @@
-.github/workflows/build.yml
+name: Build TYFZA1 firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 可选。填写后创建同名 Release，例如 v0.1.0
+        required: false
+        default: ''
+      source_commit:
+        description: 可选。lyq1996/rtl9617c-openwrt 的 main 分支提交号
+        required: false
+        default: 'cea9938fc81fd7fe2b7a9ddd71f2d0e4ed7895bf'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tyfza1-firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Shanghai
+  SRC_URL: https://github.com/lyq1996/rtl9617c-openwrt.git
+  SRC_COMMIT: ${{ inputs.source_commit || 'cea9938fc81fd7fe2b7a9ddd71f2d0e4ed7895bf' }}
+  ARGON_URL: https://github.com/jerrykuku/luci-theme-argon.git
+  ARGON_COMMIT: 539e3e1db56b2348c3655615540e45638b797c73
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [2p5g, 4ge]
+    steps:
+      - name: Checkout build project
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential busybox clang-18 llvm-18 lld-18 flex bison gawk \
+            gettext git libncurses-dev libssl-dev python3 python3-setuptools \
+            rsync unzip zlib1g-dev file wget curl device-tree-compiler \
+            u-boot-tools swig libelf-dev python3-pyelftools python3-dev \
+            libfuse-dev pkgconf
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.96.1 --profile minimal
+          rustup target add --toolchain 1.96.1 aarch64-unknown-linux-musl
+          echo "TYFZA1_CARGO=$(rustup which --toolchain 1.96.1 cargo)" >> "$GITHUB_ENV"
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: openwrt/dl
+          key: tyfza1-openwrt-dl-${{ matrix.variant }}-${{ hashFiles('configs/*.config') }}
+
+      - name: Obtain pinned OpenWrt source
+        run: sh scripts/prepare_openwrt.sh "$GITHUB_WORKSPACE/openwrt"
+
+      - name: Prepare feeds, Argon theme, LuCI patches and PE firmware
+        run: sh scripts/prepare_feeds.sh "$GITHUB_WORKSPACE/openwrt"
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          export PATH="/usr/lib/llvm-18/bin:$PATH"
+          sh scripts/build_one.sh "$GITHUB_WORKSPACE/openwrt" "${{ matrix.variant }}"
+
+      - name: Upload variant artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tyfza1-${{ matrix.variant }}
+          path: artifacts/${{ matrix.variant }}/
+          retention-days: 30
+          if-no-files-found: error
+
+  release:
+    name: Package and publish
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout build project
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tyfza1-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Normalize artifact layout
+        run: |
+          # upload-artifact 使用 name: tyfza1-2p5g / tyfza1-4ge；
+          # package_release.sh 期望 artifacts/2p5g 与 artifacts/4ge。
+          mv artifacts/tyfza1-2p5g artifacts/2p5g
+          mv artifacts/tyfza1-4ge artifacts/4ge
+          sh scripts/package_release.sh "$GITHUB_WORKSPACE/artifacts/release"
+          {
+            echo "## TYFZA1 firmware"
+            echo
+            echo "Source: lyq1996/rtl9617c-openwrt @ ${{ env.SRC_COMMIT }}"
+            echo
+            echo "Variants: 2.5GE + 3xGE, 4xGE"
+            echo
+            echo "Images are FIT sysupgrade.itb for the native U-Boot. Verify the board variant before flashing."
+          } > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tyfza1-firmware-${{ github.run_id }}
+          path: artifacts/release/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish release
+        if: ${{ inputs.release_tag != '' || startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          name: ${{ inputs.release_tag || github.ref_name }}
+          body_path: ${{ runner.temp }}/release-notes.md
+          files: artifacts/release/**
+          fail_on_unmatched_files: false
+          draft: false
+          prerelease: false
